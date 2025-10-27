@@ -1,5 +1,6 @@
 # app/pdf_utils.py
 from pathlib import Path
+import os
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,14 @@ def convert_pdf_to_images(pdf_path: str, out_dir: str, dpi: int = 300):
       2) pdf2image (requires poppler) if available
     Raises RuntimeError with actionable message if conversion not possible.
     """
+    # Validate PDF file exists
+    if not os.path.exists(pdf_path):
+        raise RuntimeError(f"PDF file not found: {pdf_path}")
+    
+    # Validate it's a file, not a directory
+    if not os.path.isfile(pdf_path):
+        raise RuntimeError(f"Path is not a file: {pdf_path}")
+    
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     images = []
 
@@ -45,13 +54,34 @@ def convert_pdf_to_images(pdf_path: str, out_dir: str, dpi: int = 300):
         try:
             import fitz
             doc = fitz.open(pdf_path)
+            
+            # Check if PDF has any pages
+            if doc.page_count == 0:
+                raise RuntimeError(f"PDF file has no pages: {pdf_path}")
+            
+            logger.info("Converting PDF with %d pages using PyMuPDF", doc.page_count)
+            
             for i, page in enumerate(doc):
-                mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                outp = Path(out_dir) / f"page_{i + 1:03d}.jpg"
-                pix.save(str(outp))
-                images.append(str(outp))
-            return images
+                try:
+                    mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    outp = Path(out_dir) / f"page_{i + 1:03d}.jpg"
+                    pix.save(str(outp))
+                    images.append(str(outp))
+                except Exception as e:
+                    logger.error("Failed to convert page %d: %s", i + 1, e)
+                    # Continue with other pages
+                    continue
+            
+            doc.close()
+            
+            # If at least some pages were converted, return them
+            if images:
+                return images
+            else:
+                logger.error("PyMuPDF failed to convert any pages")
+                # fallthrough to try pdf2image if available
+                
         except Exception as e:
             logger.exception("PyMuPDF conversion failed: %s", e)
             # fallthrough to try pdf2image if available

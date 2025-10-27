@@ -554,3 +554,123 @@ def process_image_file(image_path, working_dir, model, d_model, basename, ts):
         "cropped_zip": zip_path,
         "rows_kept": len(filtered_rows)
     }
+
+
+def process_multi_page_pdf(image_paths, working_dir, model, d_model, basename, ts):
+    """
+    Process multiple PDF pages and aggregate results into single XLSX and JSON files.
+    
+    Args:
+        image_paths: List of image file paths (one per PDF page)
+        working_dir: Working directory for temporary files
+        model: YOLO model for detection
+        d_model: YOLO model for description detection
+        basename: Base name for output files
+        ts: Timestamp string for file naming
+    
+    Returns:
+        Dictionary with paths to output files and processing statistics
+    """
+    logger.info("Processing multi-page PDF: %d pages, basename=%s ts=%s", 
+                len(image_paths), basename, ts)
+    
+    if not image_paths:
+        raise ValueError("No image paths provided for processing")
+    
+    # Create output directory for all crops
+    CROP_OUTPUT_DIR = os.path.join(working_dir, f"cropped_texts_{basename}_{ts}")
+    os.makedirs(CROP_OUTPUT_DIR, exist_ok=True)
+    
+    # Output file paths
+    JSON_OUTPUT = os.path.join(working_dir, f"{basename}_{ts}.json")
+    EXCEL_OUTPUT = os.path.join(working_dir, f"{basename}_{ts}.xlsx")
+    
+    all_rows = []
+    total_rows_kept = 0
+    
+    # Process each page
+    for page_num, image_path in enumerate(image_paths, start=1):
+        try:
+            logger.info("Processing page %d/%d: %s", page_num, len(image_paths), image_path)
+            
+            # Create page-specific subdirectory for crops
+            page_crop_dir = os.path.join(CROP_OUTPUT_DIR, f"page_{page_num:03d}")
+            os.makedirs(page_crop_dir, exist_ok=True)
+            
+            # Process the page using existing logic
+            page_basename = f"{basename}_page{page_num:03d}"
+            page_result = process_image_file(
+                image_path, 
+                working_dir, 
+                model, 
+                d_model, 
+                page_basename, 
+                ts
+            )
+            
+            # Load the JSON result from the page
+            with open(page_result["json_path"], "r", encoding="utf-8") as f:
+                page_rows = json.load(f)
+            
+            # Add page number to each row for tracking
+            for row in page_rows:
+                row["page"] = page_num
+            
+            all_rows.extend(page_rows)
+            total_rows_kept += page_result["rows_kept"]
+            
+            # Move crops to page-specific directory
+            page_crop_source = os.path.join(working_dir, f"cropped_texts_{page_basename}_{ts}")
+            if os.path.exists(page_crop_source):
+                # Copy contents to page subdirectory
+                for item in os.listdir(page_crop_source):
+                    src = os.path.join(page_crop_source, item)
+                    dst = os.path.join(page_crop_dir, item)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(src, dst)
+                # Clean up page-specific directory
+                shutil.rmtree(page_crop_source, ignore_errors=True)
+            
+            # Clean up page-specific files
+            for temp_file in [page_result["json_path"], page_result["excel_path"]]:
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception:
+                        pass
+                        
+        except Exception as e:
+            logger.exception("Failed to process page %d: %s", page_num, e)
+            # Continue processing remaining pages
+            continue
+    
+    # Save aggregated results
+    with open(JSON_OUTPUT, "w", encoding="utf-8") as f:
+        json.dump(all_rows, f, indent=4, ensure_ascii=False)
+    
+    # Create DataFrame with page column
+    df = pd.DataFrame(all_rows, columns=["page", "date", "description", "debit", "credit", "balance"])
+    
+    # Convert numeric columns
+    for col in ("debit", "credit", "balance"):
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Save to Excel
+    df.to_excel(EXCEL_OUTPUT, index=False)
+    
+    # Create zip of all crops
+    zip_base = os.path.join(working_dir, f"cropped_texts_{basename}_{ts}")
+    zip_path = shutil.make_archive(zip_base, 'zip', CROP_OUTPUT_DIR)
+    
+    logger.info("Finished multi-page processing: %d pages -> %d rows, json=%s, excel=%s",
+                len(image_paths), total_rows_kept, JSON_OUTPUT, EXCEL_OUTPUT)
+    
+    return {
+        "json_path": JSON_OUTPUT,
+        "excel_path": EXCEL_OUTPUT,
+        "cropped_zip": zip_path,
+        "rows_kept": total_rows_kept,
+        "pages_processed": len(image_paths)
+    }

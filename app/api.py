@@ -132,9 +132,13 @@ def process_endpoint():
             "elapsed_seconds": elapsed
         }
         
-        # Add page count if multi-page processing was used
+        # Add page statistics if multi-page processing was used
         if result_info.get("pages_processed"):
             response["pages_processed"] = result_info["pages_processed"]
+            if result_info.get("pages_total"):
+                response["pages_total"] = result_info["pages_total"]
+            if result_info.get("pages_failed"):
+                response["pages_failed"] = result_info["pages_failed"]
         
         return jsonify(response)
 
@@ -256,8 +260,14 @@ def process_pdf_endpoint():
             "uploaded": uploads,
             "rows_kept": result_info.get("rows_kept"),
             "pages_processed": result_info.get("pages_processed"),
+            "pages_total": result_info.get("pages_total"),
             "elapsed_seconds": elapsed
         }
+        
+        # Add failure information if any pages failed
+        if result_info.get("pages_failed", 0) > 0:
+            response["pages_failed"] = result_info["pages_failed"]
+            response["warning"] = f"{result_info['pages_failed']} page(s) failed to process"
         
         return jsonify(response)
 

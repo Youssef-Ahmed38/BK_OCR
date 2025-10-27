@@ -570,12 +570,27 @@ def process_multi_page_pdf(image_paths, working_dir, model, d_model, basename, t
     
     Returns:
         Dictionary with paths to output files and processing statistics
+    
+    Raises:
+        ValueError: If no image paths provided
+        RuntimeError: If all pages fail to process
     """
     logger.info("Processing multi-page PDF: %d pages, basename=%s ts=%s", 
                 len(image_paths), basename, ts)
     
     if not image_paths:
         raise ValueError("No image paths provided for processing")
+    
+    # Validate that image paths exist
+    valid_image_paths = []
+    for img_path in image_paths:
+        if not os.path.exists(img_path):
+            logger.warning("Image path does not exist: %s", img_path)
+        else:
+            valid_image_paths.append(img_path)
+    
+    if not valid_image_paths:
+        raise ValueError("No valid image paths found for processing")
     
     # Create output directory for all crops
     CROP_OUTPUT_DIR = os.path.join(working_dir, f"cropped_texts_{basename}_{ts}")
@@ -587,11 +602,20 @@ def process_multi_page_pdf(image_paths, working_dir, model, d_model, basename, t
     
     all_rows = []
     total_rows_kept = 0
+    failed_pages = []
+    successful_pages = []
     
     # Process each page
-    for page_num, image_path in enumerate(image_paths, start=1):
+    for page_num, image_path in enumerate(valid_image_paths, start=1):
         try:
-            logger.info("Processing page %d/%d: %s", page_num, len(image_paths), image_path)
+            logger.info("Processing page %d/%d: %s", page_num, len(valid_image_paths), image_path)
+            
+            # Validate image can be read
+            test_img = cv2.imread(image_path)
+            if test_img is None:
+                logger.error("Failed to read image for page %d: %s", page_num, image_path)
+                failed_pages.append(page_num)
+                continue
             
             # Create page-specific subdirectory for crops
             page_crop_dir = os.path.join(CROP_OUTPUT_DIR, f"page_{page_num:03d}")
@@ -640,22 +664,41 @@ def process_multi_page_pdf(image_paths, working_dir, model, d_model, basename, t
                         os.remove(temp_file)
                     except Exception:
                         pass
+            
+            successful_pages.append(page_num)
                         
         except Exception as e:
             logger.exception("Failed to process page %d: %s", page_num, e)
+            failed_pages.append(page_num)
             # Continue processing remaining pages
             continue
+    
+    # Check if at least some pages were processed successfully
+    if not successful_pages:
+        raise RuntimeError(
+            f"All {len(valid_image_paths)} pages failed to process. "
+            f"Check logs for details on individual page failures."
+        )
+    
+    if failed_pages:
+        logger.warning("Successfully processed %d/%d pages. Failed pages: %s", 
+                      len(successful_pages), len(valid_image_paths), failed_pages)
     
     # Save aggregated results
     with open(JSON_OUTPUT, "w", encoding="utf-8") as f:
         json.dump(all_rows, f, indent=4, ensure_ascii=False)
     
     # Create DataFrame with page column
-    df = pd.DataFrame(all_rows, columns=["page", "date", "description", "debit", "credit", "balance"])
+    if all_rows:
+        df = pd.DataFrame(all_rows, columns=["page", "date", "description", "debit", "credit", "balance"])
+    else:
+        # Create empty DataFrame with correct columns if no rows
+        df = pd.DataFrame(columns=["page", "date", "description", "debit", "credit", "balance"])
     
     # Convert numeric columns
     for col in ("debit", "credit", "balance"):
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
     
     # Save to Excel
     df.to_excel(EXCEL_OUTPUT, index=False)
@@ -664,13 +707,15 @@ def process_multi_page_pdf(image_paths, working_dir, model, d_model, basename, t
     zip_base = os.path.join(working_dir, f"cropped_texts_{basename}_{ts}")
     zip_path = shutil.make_archive(zip_base, 'zip', CROP_OUTPUT_DIR)
     
-    logger.info("Finished multi-page processing: %d pages -> %d rows, json=%s, excel=%s",
-                len(image_paths), total_rows_kept, JSON_OUTPUT, EXCEL_OUTPUT)
+    logger.info("Finished multi-page processing: %d successful, %d failed -> %d rows, json=%s, excel=%s",
+                len(successful_pages), len(failed_pages), total_rows_kept, JSON_OUTPUT, EXCEL_OUTPUT)
     
     return {
         "json_path": JSON_OUTPUT,
         "excel_path": EXCEL_OUTPUT,
         "cropped_zip": zip_path,
         "rows_kept": total_rows_kept,
-        "pages_processed": len(image_paths)
+        "pages_processed": len(successful_pages),
+        "pages_total": len(valid_image_paths),
+        "pages_failed": len(failed_pages)
     }

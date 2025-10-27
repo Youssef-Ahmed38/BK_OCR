@@ -204,10 +204,12 @@ def process_pdf_endpoint():
             
         except RuntimeError as e:
             logger.error("PDF conversion failed (runtime): %s", e)
-            return jsonify({"error": "PDF conversion failed", "detail": str(e)}), 500
+            # Don't expose internal details
+            return jsonify({"error": "PDF conversion failed"}), 500
         except Exception as e:
             logger.exception("PDF processing failed")
-            return jsonify({"error": "PDF processing failed", "detail": str(e)}), 500
+            # Don't expose internal details
+            return jsonify({"error": "PDF processing failed"}), 500
 
         elapsed = time.time() - start
         uploads = {}
@@ -222,7 +224,8 @@ def process_pdf_endpoint():
                 MINIO_CLIENT.fput_object(BUCKET_NAME, obj_name, local_path)
             except Exception as e:
                 logger.exception("MinIO upload failed")
-                return jsonify({"error": "MinIO upload failed", "detail": str(e)}), 500
+                # Don't expose internal details
+                return jsonify({"error": "MinIO upload failed"}), 500
 
             try:
                 presigned = MINIO_CLIENT.get_presigned_url("GET", BUCKET_NAME, obj_name, expires=MINIO_PRESIGNED_EXPIRE)
@@ -243,7 +246,8 @@ def process_pdf_endpoint():
                 MINIO_CLIENT.fput_object(BUCKET_NAME, obj_name, zip_local)
             except Exception as e:
                 logger.exception("MinIO upload failed (crops)")
-                return jsonify({"error": "MinIO upload failed (crops)", "detail": str(e)}), 500
+                # Don't expose internal details
+                return jsonify({"error": "MinIO upload failed (crops)"}), 500
 
             try:
                 presigned = MINIO_CLIENT.get_presigned_url("GET", BUCKET_NAME, obj_name, expires=MINIO_PRESIGNED_EXPIRE)
@@ -273,7 +277,8 @@ def process_pdf_endpoint():
 
     except Exception as e:
         logger.exception("PDF processing failed")
-        return jsonify({"error": "PDF processing failed", "detail": str(e)}), 500
+        # Don't expose internal details
+        return jsonify({"error": "PDF processing failed"}), 500
 
     finally:
         try:
